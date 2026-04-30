@@ -7,24 +7,25 @@ enabled = true
 pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1266"
-# context field will be replaced with actual mint address at runtime
 output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
 
 [[routes]]
 name = "ethereum"
-enabled = false
+enabled = true
 pattern = "^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
-output_address = "127.0.0.1:9002"
+output_address = "127.0.0.1:1277"
 output_format = { context = "ETH_MINT_ADDRESS", command = "tg_eth", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
+chain_hints = ["ethereum", "eth", "erc20", "mainnet"]
 
 [[routes]]
 name = "bnb"
-enabled = false
+enabled = true
 pattern = "^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
 output_address = "127.0.0.1:9003"
 output_format = { context = "BNB_MINT_ADDRESS", command = "tg_bnb", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
+chain_hints = ["bsc", "bnb", "binance", "bep20", "pancake", "bscan"]
 
 [monitoring]
 log_messages = true

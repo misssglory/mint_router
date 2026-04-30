@@ -15,7 +15,6 @@ pub struct Router {
     ethereum_client: EthereumClient,
     bnb_client: BnbClient,
     route_patterns: Vec<(RouteConfig, Regex)>,
-    solana_mint_pattern: Regex,
 }
 
 impl Router {
@@ -29,113 +28,192 @@ impl Router {
             }
         }
         
-        let solana_mint_pattern = Regex::new(r"[1-9A-HJ-NP-Za-km-z]{32,44}")?;
-        
         Ok(Self {
             config,
             solana_client: SolanaClient::new(),
             ethereum_client: EthereumClient::new(),
             bnb_client: BnbClient::new(),
             route_patterns,
-            solana_mint_pattern,
         })
     }
     
     pub fn process_message(&self, msg: &IncomingMessage) {
         let timestamp = get_timestamp_micros();
         
-        // Collect all potential mint addresses from different sources
-        let mut all_mints = Vec::new();
-        
-        // 1. Add mints from the mints array
-        all_mints.extend(msg.mints.clone());
-        
-        // 2. Extract base58 strings from text (for Solana)
-        all_mints.extend(self.extract_base58_mints(&msg.text));
-        
-        // 3. Extract Ethereum addresses from text
-        all_mints.extend(self.extract_eth_addresses(&msg.text));
-        
-        // Remove duplicates while preserving order
-        let mut unique_mints = Vec::new();
-        for mint in all_mints {
-            if !unique_mints.contains(&mint) {
-                unique_mints.push(mint);
+        // Process Solana mints
+        let solana_mints = self.collect_solana_mints(msg);
+        for mint_address in solana_mints {
+            if let Some(route) = self.find_route_by_name("solana") {
+                if self.config.monitoring.log_forwarding {
+                    println!("[ROUTER] Processing Solana mint: {}", mint_address);
+                }
+                let output_msg = self.create_output_message(msg, route, &mint_address, timestamp);
+                self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
         
-        if unique_mints.is_empty() && self.config.monitoring.log_messages {
-            println!("[ROUTER] No mint addresses found in message");
-            return;
+        // Process Ethereum mints
+        let eth_mints = self.collect_ethereum_mints(msg);
+        for mint_address in eth_mints {
+            if let Some(route) = self.find_route_by_name("ethereum") {
+                if self.config.monitoring.log_forwarding {
+                    println!("[ROUTER] Processing Ethereum mint: {}", mint_address);
+                }
+                let output_msg = self.create_output_message(msg, route, &mint_address, timestamp);
+                self.forward_to_client(&output_msg, route, &mint_address);
+            }
         }
         
-        for mint_address in &unique_mints {
-            // Find which route matches this mint address
-            if let Some((route, _)) = self.route_patterns
-                .iter()
-                .find(|(_, pattern)| pattern.is_match(mint_address))
-            {
-                let output_msg = self.create_output_message(msg, route, mint_address, timestamp);
-                
+        // Process BNB mints
+        let bnb_mints = self.collect_bnb_mints(msg);
+        for mint_address in bnb_mints {
+            if let Some(route) = self.find_route_by_name("bnb") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Forwarding mint {} to {} ({})", 
-                             mint_address, route.name, route.output_address);
+                    println!("[ROUTER] Processing BNB mint: {}", mint_address);
                 }
-                
-                // Forward to appropriate client based on route name
-                let result = match route.name.as_str() {
-                    "solana" => self.solana_client.forward_message(&output_msg, route),
-                    "ethereum" => self.ethereum_client.forward_message(&output_msg, route),
-                    "bnb" => self.bnb_client.forward_message(&output_msg, route),
-                    _ => {
-                        if self.config.monitoring.log_errors {
-                            eprintln!("[ROUTER] Unknown route name: '{}'", route.name);
-                        }
-                        Err(format!("Unknown route: {}", route.name))
-                    },
-                };
-                
-                if let Err(err) = result {
-                    if self.config.monitoring.log_errors {
-                        eprintln!("[ROUTER] Failed to forward to {}: {}", route.name, err);
-                    }
-                } else if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Successfully forwarded to {}", route.name);
-                }
-            } else if self.config.monitoring.log_messages {
-                println!("[ROUTER] No matching route for mint: {}", mint_address);
+                let output_msg = self.create_output_message(msg, route, &mint_address, timestamp);
+                self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
     }
     
-    fn extract_base58_mints(&self, text: &str) -> Vec<String> {
+    fn collect_solana_mints(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut mints = Vec::new();
         
-        for capture in self.solana_mint_pattern.find_iter(text) {
-            let candidate = capture.as_str();
-            
-            if candidate.len() >= 32 && candidate.len() <= 44 {
-                if !candidate.starts_with("http") && 
-                   !candidate.contains("://") &&
-                   !candidate.contains(".com") &&
-                   !candidate.contains(".org") {
-                    mints.push(candidate.to_string());
-                }
+        // Add from solana_mints field if present
+        mints.extend(msg.solana_mints.clone());
+        
+        // Add from generic mints field (filter for Solana format)
+        for mint in &msg.mints {
+            // Solana addresses are base58 and don't start with 0x
+            if !mint.starts_with("0x") && mint.len() >= 32 && mint.len() <= 44 {
+                mints.push(mint.clone());
             }
         }
         
+        // Check addresses.solana if present
+        if let Some(addresses) = &msg.addresses {
+            if let Some(solana_addrs) = addresses.get("solana") {
+                mints.extend(solana_addrs.clone());
+            }
+        }
+        
+        // Remove duplicates
+        mints.sort();
+        mints.dedup();
         mints
     }
     
-    fn extract_eth_addresses(&self, text: &str) -> Vec<String> {
-        let mut addresses = Vec::new();
-        let eth_pattern = Regex::new(r"0x[a-fA-F0-9]{40}").unwrap();
+    fn collect_ethereum_mints(&self, msg: &IncomingMessage) -> Vec<String> {
+        let mut mints = Vec::new();
         
-        for capture in eth_pattern.find_iter(text) {
-            addresses.push(capture.as_str().to_string());
+        // Add from ethereum_mints field
+        mints.extend(msg.ethereum_mints.clone());
+        
+        // Add from evm_mints field
+        mints.extend(msg.evm_mints.clone());
+        
+        // Add from generic mints field (filter for 0x addresses)
+        for mint in &msg.mints {
+            if mint.starts_with("0x") && mint.len() == 42 {
+                // Check if it's not marked as BNB elsewhere
+                if !msg.bsc_mints.contains(mint) {
+                    mints.push(mint.clone());
+                }
+            }
         }
         
-        addresses
+        // Check addresses.ethereum if present
+        if let Some(addresses) = &msg.addresses {
+            if let Some(eth_addrs) = addresses.get("ethereum") {
+                mints.extend(eth_addrs.clone());
+            }
+        }
+        
+        // Remove duplicates
+        mints.sort();
+        mints.dedup();
+        mints
+    }
+    
+    fn collect_bnb_mints(&self, msg: &IncomingMessage) -> Vec<String> {
+        let mut mints = Vec::new();
+        
+        // Add from bsc_mints field
+        mints.extend(msg.bsc_mints.clone());
+        
+        // Add from generic mints field that are also in bsc_mints
+        for mint in &msg.mints {
+            if msg.bsc_mints.contains(mint) {
+                mints.push(mint.clone());
+            }
+        }
+        
+        // Check addresses.bsc if present
+        if let Some(addresses) = &msg.addresses {
+            if let Some(bsc_addrs) = addresses.get("bsc") {
+                mints.extend(bsc_addrs.clone());
+            }
+            if let Some(unknown_addrs) = addresses.get("unknown") {
+                // Check unknown addresses for BNB hints in context
+                for addr in unknown_addrs {
+                    if self.is_bnb_address(addr, &msg.text) {
+                        mints.push(addr.clone());
+                    }
+                }
+            }
+        }
+        
+        // Remove duplicates
+        mints.sort();
+        mints.dedup();
+        mints
+    }
+    
+    fn is_bnb_address(&self, _address: &str, context: &str) -> bool {
+        let context_lower = context.to_lowercase();
+        let bnb_keywords = ["bsc", "bnb", "binance", "bep20", "pancake", "bakery"];
+        
+        for keyword in bnb_keywords {
+            if context_lower.contains(keyword) {
+                return true;
+            }
+        }
+        false
+    }
+    
+    fn find_route_by_name(&self, name: &str) -> Option<&RouteConfig> {
+        self.route_patterns
+            .iter()
+            .find(|(route, _)| route.name == name)
+            .map(|(route, _)| route)
+    }
+    
+    fn forward_to_client(&self, output_msg: &OutputMessage, route: &RouteConfig, mint_address: &str) {
+        if self.config.monitoring.log_forwarding {
+            println!("[ROUTER] Forwarding mint {} to {} ({})", 
+                     mint_address, route.name, route.output_address);
+        }
+        
+        let result = match route.name.as_str() {
+            "solana" => self.solana_client.forward_message(output_msg, route),
+            "ethereum" => self.ethereum_client.forward_message(output_msg, route),
+            "bnb" => self.bnb_client.forward_message(output_msg, route),
+            _ => {
+                if self.config.monitoring.log_errors {
+                    eprintln!("[ROUTER] Unknown route name: '{}'", route.name);
+                }
+                Err(format!("Unknown route: {}", route.name))
+            },
+        };
+        
+        if let Err(err) = result {
+            if self.config.monitoring.log_errors {
+                eprintln!("[ROUTER] Failed to forward to {}: {}", route.name, err);
+            }
+        } else if self.config.monitoring.log_forwarding {
+            println!("[ROUTER] Successfully forwarded to {}", route.name);
+        }
     }
     
     fn create_output_message(

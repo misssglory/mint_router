@@ -21,6 +21,8 @@ pub struct RouteConfig {
     pub output_type: String,
     pub output_address: String,
     pub output_format: OutputFormat,
+    #[serde(default)]
+    pub chain_hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
