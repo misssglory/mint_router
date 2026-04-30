@@ -1,3 +1,4 @@
+// src/config.rs
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -6,6 +7,8 @@ pub struct Config {
     pub tcp_input: TcpInputConfig,
     pub routes: Vec<RouteConfig>,
     pub monitoring: MonitoringConfig,
+    pub database: DatabaseConfig,
+    pub query_server: QueryServerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -32,6 +35,12 @@ pub struct OutputFormat {
     pub channel_field: String,
     pub text_field: String,
     pub timestamp_field: String,
+    #[serde(default = "default_escape_newlines")]
+    pub escape_newlines: bool,
+}
+
+fn default_escape_newlines() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -40,6 +49,25 @@ pub struct MonitoringConfig {
     pub log_errors: bool,
     pub log_connections: bool,
     pub log_forwarding: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    pub dbname: String,
+    pub pool_size: usize,
+    pub cache_size_mb: usize,
+    pub cache_ttl_seconds: u64,
+    pub compress_messages: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueryServerConfig {
+    pub enabled: bool,
+    pub listen_address: String,
 }
 
 impl Config {
