@@ -7,7 +7,7 @@ enabled = true
 pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1266"
-output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
+output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
 
 [[routes]]
 name = "ethereum"
@@ -15,7 +15,7 @@ enabled = true
 pattern = "^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1277"
-output_format = { context = "ETH_MINT_ADDRESS", command = "tg_eth", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
+output_format = { context = "ETH_MINT_ADDRESS", command = "tg_eth", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
 chain_hints = ["ethereum", "eth", "erc20", "mainnet"]
 
 [[routes]]
@@ -24,7 +24,7 @@ enabled = true
 pattern = "^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
 output_address = "127.0.0.1:9003"
-output_format = { context = "BNB_MINT_ADDRESS", command = "tg_bnb", channel_field = "chat_name", text_field = "text", timestamp_field = "auto" }
+output_format = { context = "BNB_MINT_ADDRESS", command = "tg_bnb", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = false }
 chain_hints = ["bsc", "bnb", "binance", "bep20", "pancake", "bscan"]
 
 [monitoring]
@@ -32,3 +32,18 @@ log_messages = true
 log_errors = true
 log_connections = true
 log_forwarding = true
+
+[database]
+host = "localhost"
+port = 5432
+user = 'tcp_router_user'
+password = 'your_secure_password'
+dbname = "tcp_router"
+pool_size = 10
+cache_size_mb = 100
+cache_ttl_seconds = 300
+compress_messages = true
+
+[query_server]
+enabled = true
+listen_address = "127.0.0.1:9999"
