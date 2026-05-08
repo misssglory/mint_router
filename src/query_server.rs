@@ -130,10 +130,10 @@ async fn process_query(query_str: &str, db: &DatabaseManager) -> String {
                     }
 
                     let mode = parts[2];
-                    let value = parts[3];
 
                     match mode {
                         "chatid" => {
+                            let value = parts[3];
                             if let Ok(chat_id) = value.parse::<i64>() {
                                 match db.get_mints_for_chat_id(chat_id).await {
                                     Ok(mints) => json!({
@@ -151,18 +151,36 @@ async fn process_query(query_str: &str, db: &DatabaseManager) -> String {
                                 json!({"error": "Invalid chat ID"}).to_string()
                             }
                         }
-                        "chatname" => match db.get_mints_for_chat_name(value.to_string()).await {
-                            Ok(mints) => json!({
-                                "chatname": value,
-                                "mints": mints,
-                                "count": mints.len()
-                            })
-                            .to_string(),
-                            Err(err) => json!({
-                                "error": format!("Failed to query mints for chat: {}", err)
-                            })
-                            .to_string(),
-                        },
+
+                        "chatname" => {
+                            // Join all remaining parts into the raw name
+                            let raw_name = parts[3..].join(" ");
+
+                            // Strip optional surrounding quotes, e.g. "Call Analyzer 2"
+                            let chat_name = raw_name
+                                .trim()
+                                .trim_start_matches('"')
+                                .trim_end_matches('"')
+                                .to_string();
+
+                            if chat_name.is_empty() {
+                                return json!({"error": "Chat name cannot be empty"}).to_string();
+                            }
+
+                            match db.get_mints_for_chat_name(chat_name.clone()).await {
+                                Ok(mints) => json!({
+                                    "chatname": chat_name,
+                                    "mints": mints,
+                                    "count": mints.len()
+                                })
+                                .to_string(),
+                                Err(err) => json!({
+                                    "error": format!("Failed to query mints for chat: {}", err)
+                                })
+                                .to_string(),
+                            }
+                        }
+
                         _ => json!({
                             "error": "Invalid mode for channel-mints. Use chatid or chatname"
                         })
@@ -259,7 +277,12 @@ async fn process_query(query_str: &str, db: &DatabaseManager) -> String {
                         return json!({"error": "Usage: GET chat:name <name>"}).to_string();
                     }
 
-                    let chat_name = parts[2];
+                    let raw_name = parts[2..].join(" ");
+                    let chat_name = raw_name
+                        .trim()
+                        .trim_start_matches('"')
+                        .trim_end_matches('"');
+
                     match db.get_chat_id(chat_name).await {
                         Some(id) => json!({
                             "chat_id": id,
