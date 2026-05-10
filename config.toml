@@ -3,7 +3,7 @@ listen_address = "127.0.0.1:9000"
 
 [[routes]]
 name = "solana"
-enabled = true
+enabled = false
 pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1266"
