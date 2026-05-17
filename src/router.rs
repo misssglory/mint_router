@@ -7,6 +7,7 @@ use crate::models::{IncomingMessage, OutputArgs, OutputMessage};
 use regex::Regex;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tracing::{info, error, warn, debug};
 
 pub struct Router {
     config: Arc<Config>,
@@ -43,6 +44,8 @@ impl Router {
         let timestamp = get_timestamp_micros();
         let escape_newlines = self.get_escape_newlines_setting();
         
+        debug!("[ROUTER] Processing message - Original context: '{}', pool: {:?}", msg.context, msg.pool);
+        
         // Store messages for mints (only mints, not pools)
         let all_mints = self.collect_all_mints(msg);
         for mint in all_mints {
@@ -59,12 +62,10 @@ impl Router {
                 .await
             {
                 if self.config.monitoring.log_errors {
-                    eprintln!(
-                        "[ROUTER] Failed to store message for mint {}: {}", mint, err
-                    );
+                    error!("[ROUTER] Failed to store message for mint {}: {}", mint, err);
                 }
             } else if self.config.monitoring.log_messages {
-                println!("[ROUTER] Stored message for mint: {}", mint);
+                info!("[ROUTER] Stored message for mint: {}", mint);
             }
         }
 
@@ -84,12 +85,10 @@ impl Router {
                 .await
             {
                 if self.config.monitoring.log_errors {
-                    eprintln!(
-                        "[ROUTER] Failed to store message for pool {}: {}", pool, err
-                    );
+                    error!("[ROUTER] Failed to store message for pool {}: {}", pool, err);
                 }
             } else if self.config.monitoring.log_messages {
-                println!("[ROUTER] Stored message for pool: {}", pool);
+                info!("[ROUTER] Stored message for pool: {}", pool);
             }
         }
 
@@ -100,10 +99,10 @@ impl Router {
         for mint_address in solana_mints {
             if let Some(route) = self.find_route_by_name("solana") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing Solana mint: {}", mint_address);
+                    debug!("[ROUTER] Processing Solana mint: {}", mint_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, &mint_address, None, timestamp);
+                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
@@ -111,10 +110,10 @@ impl Router {
         for pool_address in solana_pools {
             if let Some(route) = self.find_route_by_name("solana") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing Solana pool: {}", pool_address);
+                    debug!("[ROUTER] Processing Solana pool: {}", pool_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, "", Some(pool_address.clone()), timestamp);
+                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -126,10 +125,10 @@ impl Router {
         for mint_address in eth_mints {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing Ethereum mint: {}", mint_address);
+                    debug!("[ROUTER] Processing Ethereum mint: {}", mint_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, &mint_address, None, timestamp);
+                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
@@ -137,10 +136,10 @@ impl Router {
         for pool_address in eth_pools {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing Ethereum pool: {}", pool_address);
+                    debug!("[ROUTER] Processing Ethereum pool: {}", pool_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, "", Some(pool_address.clone()), timestamp);
+                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -152,10 +151,10 @@ impl Router {
         for mint_address in bnb_mints {
             if let Some(route) = self.find_route_by_name("bnb") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing BNB mint: {}", mint_address);
+                    debug!("[ROUTER] Processing BNB mint: {}", mint_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, &mint_address, None, timestamp);
+                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
@@ -163,10 +162,10 @@ impl Router {
         for pool_address in bnb_pools {
             if let Some(route) = self.find_route_by_name("bnb") {
                 if self.config.monitoring.log_forwarding {
-                    println!("[ROUTER] Processing BNB pool: {}", pool_address);
+                    debug!("[ROUTER] Processing BNB pool: {}", pool_address);
                 }
                 let output_msg = self
-                    .create_output_message(msg, route, "", Some(pool_address.clone()), timestamp);
+                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -362,7 +361,7 @@ impl Router {
         address: &str,
     ) {
         if self.config.monitoring.log_forwarding {
-            println!(
+            info!(
                 "[ROUTER] Forwarding address {} to {} ({})", 
                 address, route.name, route.output_address
             );
@@ -374,7 +373,7 @@ impl Router {
             "bnb" => self.bnb_client.forward_message(output_msg, route),
             _ => {
                 if self.config.monitoring.log_errors {
-                    eprintln!("[ROUTER] Unknown route name: '{}'", route.name);
+                    error!("[ROUTER] Unknown route name: '{}'", route.name);
                 }
                 Err(format!("Unknown route: {}", route.name))
             }
@@ -382,26 +381,31 @@ impl Router {
         
         if let Err(err) = result {
             if self.config.monitoring.log_errors {
-                eprintln!("[ROUTER] Failed to forward to {}: {}", route.name, err);
+                error!("[ROUTER] Failed to forward to {}: {}", route.name, err);
             }
         } else if self.config.monitoring.log_forwarding {
-            println!("[ROUTER] Successfully forwarded to {}", route.name);
+            info!("[ROUTER] Successfully forwarded to {}", route.name);
         }
     }
 
+    /// FIXED: Preserve original context from incoming message
+    /// Do NOT override with mint_address - keep msg.context as-is
     fn create_output_message(
         &self,
         msg: &IncomingMessage,
         route: &RouteConfig,
-        mint_address: &str,
+        mint_address: Option<String>,
         pool_address: Option<String>,
         timestamp: i64,
     ) -> OutputMessage {
-        let context = if !mint_address.is_empty() {
-            mint_address.to_string()
-        } else {
-            String::new() // Empty string if only pool is present
-        };
+        // CRITICAL FIX: Use the original context from the incoming message
+        // Do NOT replace with mint_address or pool_address
+        let context = msg.context.clone();
+        
+        // Determine which address to put in pool field (prefer pool over mint)
+        let pool = pool_address.or(mint_address);
+        
+        debug!("[ROUTER] Creating output message - Original context: '{}', pool: {:?}", context, pool);
         
         OutputMessage {
             context,
@@ -411,7 +415,7 @@ impl Router {
                 ts: timestamp,
                 text: msg.text.clone(),
             },
-            pool: pool_address,
+            pool,
         }
     }
 

@@ -15,12 +15,14 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Runtime;
+use tracing::{info, error, debug, warn};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt: Arc<Runtime>) {
     let addr = stream.peer_addr().ok();
     
     if config.monitoring.log_connections {
-        println!("[INPUT] Client connected: {:?}", addr);
+        info!("[INPUT] Client connected: {:?}", addr);
     }
     
     let reader = BufReader::new(stream);
@@ -29,15 +31,17 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
         match line {
             Ok(msg_str) => {
                 if config.monitoring.log_messages {
-                    println!("[INPUT] Received: {}", msg_str);
+                    debug!("[INPUT] Received: {}", msg_str);
                 }
                 
                 match serde_json::from_str::<models::IncomingMessage>(&msg_str) {
                     Ok(msg) => {
                         if config.monitoring.log_messages {
-                            println!("[INPUT] Processing message from chat: {}", msg.chat_name);
-                            println!("[INPUT] Text length: {} chars", msg.text.len());
-                            println!("[INPUT] Mints array: {:?}", msg.mints);
+                            debug!("[INPUT] Processing message from chat: {}", msg.chat_name);
+                            debug!("[INPUT] Original context in message: '{}'", msg.context);
+                            debug!("[INPUT] Original pool field: {:?}", msg.pool);
+                            debug!("[INPUT] Text length: {} chars", msg.text.len());
+                            debug!("[INPUT] Mints array: {:?}", msg.mints);
                         }
                         
                         // Clone the router and spawn the async task using the provided runtime
@@ -51,15 +55,15 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
                     }
                     Err(err) => {
                         if config.monitoring.log_errors {
-                            eprintln!("[INPUT] Failed to parse message: {}", err);
-                            eprintln!("[INPUT] Raw message: {}", msg_str);
+                            error!("[INPUT] Failed to parse message: {}", err);
+                            error!("[INPUT] Raw message: {}", msg_str);
                         }
                     }
                 }
             }
             Err(err) => {
                 if config.monitoring.log_errors {
-                    eprintln!("[INPUT] Read error: {}", err);
+                    error!("[INPUT] Read error: {}", err);
                 }
                 break;
             }
@@ -67,11 +71,23 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
     }
     
     if config.monitoring.log_connections {
-        println!("[INPUT] Client disconnected: {:?}", addr);
+        info!("[INPUT] Client disconnected: {:?}", addr);
     }
 }
 
 fn main() -> std::io::Result<()> {
+    // Initialize tracing subscriber with JSON formatting for production
+    // Or use simple formatting for development
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+    
+    info!("Starting TCP Router with tracing enabled");
+    
     // Create tokio runtime
     let rt = Arc::new(Runtime::new().unwrap());
     
@@ -80,7 +96,7 @@ fn main() -> std::io::Result<()> {
         let config = match Config::from_file("config.toml") {
             Ok(c) => Arc::new(c),
             Err(e) => {
-                eprintln!("Failed to load config: {}", e);
+                error!("Failed to load config: {}", e);
                 std::process::exit(1);
             }
         };
@@ -89,7 +105,7 @@ fn main() -> std::io::Result<()> {
         let db = match DatabaseManager::new(config.database.clone()).await {
             Ok(d) => Arc::new(d),
             Err(e) => {
-                eprintln!("Failed to initialize database: {}", e);
+                error!("Failed to initialize database: {}", e);
                 std::process::exit(1);
             }
         };
@@ -98,7 +114,7 @@ fn main() -> std::io::Result<()> {
         let router = match Router::new(Arc::clone(&config), Arc::clone(&db)).await {
             Ok(r) => Arc::new(r),
             Err(e) => {
-                eprintln!("Failed to initialize router: {}", e);
+                error!("Failed to initialize router: {}", e);
                 std::process::exit(1);
             }
         };
@@ -107,30 +123,30 @@ fn main() -> std::io::Result<()> {
         let query_server = QueryServer::new(config.query_server.clone(), Arc::clone(&db));
         let query_server_handle = thread::spawn(move || {
             if let Err(e) = query_server.start() {
-                eprintln!("Query server error: {}", e);
+                error!("Query server error: {}", e);
             }
         });
         
-        println!("TCP Router starting...");
-        println!("================================");
-        println!("Input listener: {}", config.tcp_input.listen_address);
-        println!("PostgreSQL Database: {}:{}/{}", 
+        info!("TCP Router starting...");
+        info!("================================");
+        info!("Input listener: {}", config.tcp_input.listen_address);
+        info!("PostgreSQL Database: {}:{}/{}", 
             config.database.host, 
             config.database.port, 
             config.database.dbname);
-        println!("Cache size: {} MB", config.database.cache_size_mb);
-        println!("Cache TTL: {} seconds", config.database.cache_ttl_seconds);
-        println!("Compression: {}", config.database.compress_messages);
-        println!("\nEnabled routes:");
+        info!("Cache size: {} MB", config.database.cache_size_mb);
+        info!("Cache TTL: {} seconds", config.database.cache_ttl_seconds);
+        info!("Compression: {}", config.database.compress_messages);
+        info!("Enabled routes:");
         for route in config.get_enabled_routes() {
-            println!("  • {} -> {} ({})", 
+            info!("  • {} -> {} ({})", 
                      route.name, 
                      route.output_address,
                      route.output_type);
-            println!("    Pattern: {}", route.pattern);
-            println!("    Escape newlines: {}", route.output_format.escape_newlines);
+            info!("    Pattern: {}", route.pattern);
+            info!("    Escape newlines: {}", route.output_format.escape_newlines);
         }
-        println!("================================");
+        info!("================================");
         
         let listener = TcpListener::bind(&config.tcp_input.listen_address)?;
         
@@ -147,7 +163,7 @@ fn main() -> std::io::Result<()> {
                 }
                 Err(err) => {
                     if config.monitoring.log_errors {
-                        eprintln!("[INPUT] Accept error: {}", err);
+                        error!("[INPUT] Accept error: {}", err);
                     }
                 }
             }
