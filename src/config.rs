@@ -42,13 +42,16 @@ pub struct OutputFormat {
 fn default_escape_newlines() -> bool {
     false
 }
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MonitoringConfig {
     pub log_messages: bool,
     pub log_errors: bool,
     pub log_connections: bool,
     pub log_forwarding: bool,
+    #[serde(default)]
+    pub log_forwarding_payload: bool,
+    #[serde(default)]
+    pub log_incoming_payload: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -76,7 +79,7 @@ impl Config {
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
-    
+
     pub fn get_enabled_routes(&self) -> Vec<&RouteConfig> {
         self.routes.iter().filter(|r| r.enabled).collect()
     }

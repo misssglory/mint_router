@@ -12,7 +12,7 @@ output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "cha
 [[routes]]
 name = "ethereum"
 enabled = true
-pattern = "^0x[a-fA-F0-9]{40}$"
+pattern = "^0x[a-fA-F0-9]{64}$|^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1277"
 output_format = { context = "ETH_MINT_ADDRESS", command = "tg_eth", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
@@ -32,6 +32,8 @@ log_messages = true
 log_errors = true
 log_connections = true
 log_forwarding = true
+log_forwarding_payload = true  # NEW: Log actual payload being sent
+log_incoming_payload = false   # NEW: Log incoming payload (can be sensitive)
 
 [database]
 host = "localhost"

@@ -7,7 +7,7 @@ use crate::models::{IncomingMessage, OutputArgs, OutputMessage};
 use regex::Regex;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::{info, error, warn, debug};
+use tracing::{debug, error, info, warn};
 
 pub struct Router {
     config: Arc<Config>,
@@ -19,10 +19,7 @@ pub struct Router {
 }
 
 impl Router {
-    pub async fn new(
-        config: Arc<Config>,
-        db: Arc<DatabaseManager>,
-    ) -> Result<Self, regex::Error> {
+    pub async fn new(config: Arc<Config>, db: Arc<DatabaseManager>) -> Result<Self, regex::Error> {
         let mut route_patterns = Vec::new();
         for route in &config.routes {
             if route.enabled {
@@ -43,9 +40,12 @@ impl Router {
     pub async fn process_message(&self, msg: &IncomingMessage) {
         let timestamp = get_timestamp_micros();
         let escape_newlines = self.get_escape_newlines_setting();
-        
-        debug!("[ROUTER] Processing message - Original context: '{}', pool: {:?}", msg.context, msg.pool);
-        
+
+        debug!(
+            "[ROUTER] Processing message - Original context: '{}', pool: {:?}",
+            msg.context, msg.pool
+        );
+
         // Store messages for mints (only mints, not pools)
         let all_mints = self.collect_all_mints(msg);
         for mint in all_mints {
@@ -62,7 +62,10 @@ impl Router {
                 .await
             {
                 if self.config.monitoring.log_errors {
-                    error!("[ROUTER] Failed to store message for mint {}: {}", mint, err);
+                    error!(
+                        "[ROUTER] Failed to store message for mint {}: {}",
+                        mint, err
+                    );
                 }
             } else if self.config.monitoring.log_messages {
                 info!("[ROUTER] Stored message for mint: {}", mint);
@@ -85,7 +88,10 @@ impl Router {
                 .await
             {
                 if self.config.monitoring.log_errors {
-                    error!("[ROUTER] Failed to store message for pool {}: {}", pool, err);
+                    error!(
+                        "[ROUTER] Failed to store message for pool {}: {}",
+                        pool, err
+                    );
                 }
             } else if self.config.monitoring.log_messages {
                 info!("[ROUTER] Stored message for pool: {}", pool);
@@ -95,25 +101,35 @@ impl Router {
         // Process Solana mints and pools
         let solana_mints = self.collect_solana_mints(msg);
         let solana_pools = self.collect_solana_pools(msg);
-        
+
         for mint_address in solana_mints {
             if let Some(route) = self.find_route_by_name("solana") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing Solana mint: {}", mint_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    Some(mint_address.clone()),
+                    None,
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
-        
+
         for pool_address in solana_pools {
             if let Some(route) = self.find_route_by_name("solana") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing Solana pool: {}", pool_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    None,
+                    Some(pool_address.clone()),
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -121,25 +137,35 @@ impl Router {
         // Process Ethereum mints and pools
         let eth_mints = self.collect_ethereum_mints(msg);
         let eth_pools = self.collect_ethereum_pools(msg);
-        
+
         for mint_address in eth_mints {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing Ethereum mint: {}", mint_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    Some(mint_address.clone()),
+                    None,
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
-        
+
         for pool_address in eth_pools {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing Ethereum pool: {}", pool_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    None,
+                    Some(pool_address.clone()),
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -147,25 +173,35 @@ impl Router {
         // Process BNB mints and pools
         let bnb_mints = self.collect_bnb_mints(msg);
         let bnb_pools = self.collect_bnb_pools(msg);
-        
+
         for mint_address in bnb_mints {
             if let Some(route) = self.find_route_by_name("bnb") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing BNB mint: {}", mint_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, Some(mint_address.clone()), None, timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    Some(mint_address.clone()),
+                    None,
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &mint_address);
             }
         }
-        
+
         for pool_address in bnb_pools {
             if let Some(route) = self.find_route_by_name("bnb") {
                 if self.config.monitoring.log_forwarding {
                     debug!("[ROUTER] Processing BNB pool: {}", pool_address);
                 }
-                let output_msg = self
-                    .create_output_message(msg, route, None, Some(pool_address.clone()), timestamp);
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    None,
+                    Some(pool_address.clone()),
+                    timestamp,
+                );
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
@@ -227,18 +263,10 @@ impl Router {
         mints.dedup();
         mints
     }
-
     fn collect_ethereum_pools(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut pools = Vec::new();
         pools.extend(msg.ethereum_pools.clone());
         pools.extend(msg.evm_pools.clone());
-        for pool in &msg.pools {
-            if pool.starts_with("0x") && pool.len() == 42 {
-                if !msg.bsc_pools.contains(pool) {
-                    pools.push(pool.clone());
-                }
-            }
-        }
         if let Some(pool_addresses) = &msg.pool_addresses {
             if let Some(eth_pools) = pool_addresses.get("ethereum") {
                 pools.extend(eth_pools.clone());
@@ -251,7 +279,6 @@ impl Router {
         pools.dedup();
         pools
     }
-
     fn collect_bnb_mints(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut mints = Vec::new();
         mints.extend(msg.bsc_mints.clone());
@@ -264,37 +291,17 @@ impl Router {
             if let Some(bsc_addrs) = addresses.get("bsc") {
                 mints.extend(bsc_addrs.clone());
             }
-            if let Some(unknown_addrs) = addresses.get("unknown") {
-                for addr in unknown_addrs {
-                    if self.is_bnb_address(addr, &msg.text) {
-                        mints.push(addr.clone());
-                    }
-                }
-            }
         }
         mints.sort();
         mints.dedup();
         mints
     }
-
     fn collect_bnb_pools(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut pools = Vec::new();
         pools.extend(msg.bsc_pools.clone());
-        for pool in &msg.pools {
-            if msg.bsc_pools.contains(pool) {
-                pools.push(pool.clone());
-            }
-        }
         if let Some(pool_addresses) = &msg.pool_addresses {
             if let Some(bsc_pools) = pool_addresses.get("bsc") {
                 pools.extend(bsc_pools.clone());
-            }
-            if let Some(unknown_pools) = pool_addresses.get("unknown") {
-                for pool_addr in unknown_pools {
-                    if self.is_bnb_address(pool_addr, &msg.text) {
-                        pools.push(pool_addr.clone());
-                    }
-                }
             }
         }
         pools.sort();
@@ -354,19 +361,53 @@ impl Router {
             .map(|(route, _)| route)
     }
 
-    fn forward_to_client(
+    fn log_forwarding_details(
         &self,
-        output_msg: &OutputMessage,
         route: &RouteConfig,
         address: &str,
+        output_msg: &OutputMessage,
     ) {
+        if !self.config.monitoring.log_forwarding {
+            return;
+        }
+
+        // Always log basic info if forwarding logging is on
+        info!(
+            target: "forwarding",
+            route = %route.name,
+            output_address = %route.output_address,
+            address = %address,
+            command = %output_msg.command,
+            channel = %output_msg.args.channel,
+            "Forwarding to route"
+        );
+
+        // Log full payload if enabled
+        if self.config.monitoring.log_forwarding_payload {
+            match serde_json::to_string_pretty(output_msg) {
+                Ok(payload) => {
+                    debug!(
+                        target: "forwarding_payload",
+                        route = %route.name,
+                        payload = %payload,
+                        "Forwarding payload details"
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to serialize output message for logging: {}", e);
+                }
+            }
+        }
+    }
+
+    fn forward_to_client(&self, output_msg: &OutputMessage, route: &RouteConfig, address: &str) {
+        self.log_forwarding_details(route, address, output_msg);
         if self.config.monitoring.log_forwarding {
             info!(
-                "[ROUTER] Forwarding address {} to {} ({})", 
+                "[ROUTER] Forwarding address {} to {} ({})",
                 address, route.name, route.output_address
             );
         }
-        
         let result = match route.name.as_str() {
             "solana" => self.solana_client.forward_message(output_msg, route),
             "ethereum" => self.ethereum_client.forward_message(output_msg, route),
@@ -378,10 +419,9 @@ impl Router {
                 Err(format!("Unknown route: {}", route.name))
             }
         };
-        
         if let Err(err) = result {
             if self.config.monitoring.log_errors {
-                error!("[ROUTER] Failed to forward to {}: {}", route.name, err);
+                error ! (target : "forwarding_errors" , route = % route . name , address = % address , error = % err , "Failed to forward to route");
             }
         } else if self.config.monitoring.log_forwarding {
             info!("[ROUTER] Successfully forwarded to {}", route.name);
@@ -401,12 +441,15 @@ impl Router {
         // CRITICAL FIX: Use the original context from the incoming message
         // Do NOT replace with mint_address or pool_address
         let context = msg.context.clone();
-        
+
         // Determine which address to put in pool field (prefer pool over mint)
         let pool = pool_address.or(mint_address);
-        
-        debug!("[ROUTER] Creating output message - Original context: '{}', pool: {:?}", context, pool);
-        
+
+        debug!(
+            "[ROUTER] Creating output message - Original context: '{}', pool: {:?}",
+            context, pool
+        );
+
         OutputMessage {
             context,
             command: route.output_format.command.clone(),
@@ -433,3 +476,4 @@ fn get_timestamp_micros() -> i64 {
     let duration = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
     (duration.as_secs() as i64) * 1_000_000 + (duration.subsec_micros() as i64)
 }
+

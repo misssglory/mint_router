@@ -1,278 +1,20 @@
 use crate::config::DatabaseConfig;
 use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
-use lru::LruCache;
 use lz4_flex::block::{compress, decompress};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, NoTls, Row};
 
-mod models {
-    use super::*;
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct StoredMessage {
-        pub chat_id: i64,
-        pub chat_name: String,
-        pub text: String,
-        pub timestamp_us: i64,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct QueryResult {
-        pub chat_id: i64,
-        pub chat_name: String,
-        pub text: String,
-        pub timestamp_us: i64,
-    }
-
-    pub type ChatEntry = (i64, String);
-}
-
-mod cache {
-    use super::*;
-    use crate::database::models::QueryResult;
-
-    pub struct ChatCache {
-        id_to_name: LruCache<i64, String>,
-        name_to_id: LruCache<String, i64>,
-    }
-
-    impl ChatCache {
-        pub fn new(capacity: usize) -> Self {
-            let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
-            Self {
-                id_to_name: LruCache::new(cap),
-                name_to_id: LruCache::new(cap),
-            }
-        }
-
-        pub fn get_name(&mut self, chat_id: i64) -> Option<String> {
-            self.id_to_name.get(&chat_id).cloned()
-        }
-
-        pub fn get_id(&mut self, chat_name: &str) -> Option<i64> {
-            self.name_to_id.get(chat_name).cloned()
-        }
-
-        pub fn insert(&mut self, chat_id: i64, chat_name: String) {
-            self.id_to_name.put(chat_id, chat_name.clone());
-            self.name_to_id.put(chat_name, chat_id);
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    struct MintCacheEntry {
-        messages: Vec<QueryResult>,
-        last_update: SystemTime,
-    }
-
-    pub struct MintCache {
-        inner: LruCache<String, MintCacheEntry>,
-        ttl: Duration,
-    }
-
-    impl MintCache {
-        pub fn new(capacity: usize, ttl_seconds: u64) -> Self {
-            let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
-            Self {
-                inner: LruCache::new(cap),
-                ttl: Duration::from_secs(ttl_seconds),
-            }
-        }
-
-        pub fn get(&mut self, mint: &str) -> Option<Vec<QueryResult>> {
-            let entry = self.inner.get(mint)?;
-            let age = entry.last_update.elapsed().ok()?;
-            if age < self.ttl {
-                Some(entry.messages.clone())
-            } else {
-                None
-            }
-        }
-
-        pub fn put(&mut self, mint: String, messages: Vec<QueryResult>) {
-            self.inner.put(
-                mint,
-                MintCacheEntry {
-                    messages,
-                    last_update: SystemTime::now(),
-                },
-            );
-        }
-
-        pub fn invalidate(&mut self, mint: &str) {
-            self.inner.pop(mint);
-        }
-
-        pub fn cleanup_expired(&mut self) {
-            let now = SystemTime::now();
-            let ttl = self.ttl;
-
-            let expired: Vec<String> = self
-                .inner
-                .iter()
-                .filter(|(_, entry)| {
-                    now.duration_since(entry.last_update)
-                        .unwrap_or(Duration::ZERO)
-                        >= ttl
-                })
-                .map(|(key, _)| key.clone())
-                .collect();
-
-            for key in expired {
-                self.inner.pop(&key);
-            }
-        }
-
-        pub fn clear(&mut self) {
-            self.inner.clear();
-        }
-    }
-
-    pub use ChatCache as ChatCacheImpl;
-    pub use MintCache as MintCacheImpl;
-}
-
-mod sql {
-    pub const CREATE_SCHEMA: &str = r#"
-        CREATE TABLE IF NOT EXISTS messages (
-            id BIGSERIAL PRIMARY KEY,
-            mint TEXT NOT NULL,
-            chat_id BIGINT NOT NULL,
-            chat_name TEXT NOT NULL,
-            text BYTEA NOT NULL,
-            timestamp_us BIGINT NOT NULL,
-            compressed BOOLEAN NOT NULL DEFAULT false,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mint ON messages(mint);
-        CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp_us);
-        CREATE INDEX IF NOT EXISTS idx_chat_id ON messages(chat_id);
-        CREATE INDEX IF NOT EXISTS idx_mint_timestamp ON messages(mint, timestamp_us DESC);
-
-        CREATE TABLE IF NOT EXISTS chats (
-            chat_id BIGINT PRIMARY KEY,
-            chat_name TEXT NOT NULL,
-            last_seen_us BIGINT NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_chat_name ON chats(chat_name);
-        CREATE INDEX IF NOT EXISTS idx_chat_last_seen ON chats(last_seen_us DESC);
-    "#;
-
-    pub const INSERT_MESSAGE: &str = r#"
-        INSERT INTO messages (mint, chat_id, chat_name, text, timestamp_us, compressed)
-        VALUES ($1, $2, $3, $4, $5, $6)
-    "#;
-
-    pub const UPSERT_CHAT: &str = r#"
-        INSERT INTO chats (chat_id, chat_name, last_seen_us)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (chat_id)
-        DO UPDATE SET
-            chat_name = EXCLUDED.chat_name,
-            last_seen_us = EXCLUDED.last_seen_us,
-            updated_at = NOW()
-    "#;
-
-    pub const SELECT_MESSAGES_BY_MINT: &str = r#"
-        SELECT chat_id, chat_name, text, timestamp_us, compressed
-        FROM messages
-        WHERE mint = $1
-        ORDER BY timestamp_us DESC
-    "#;
-
-    pub const SELECT_CHAT_NAME_BY_ID: &str = r#"
-        SELECT chat_name
-        FROM chats
-        WHERE chat_id = $1
-    "#;
-
-    pub const SELECT_CHAT_ID_BY_NAME: &str = r#"
-        SELECT chat_id
-        FROM chats
-        WHERE chat_name = $1
-    "#;
-
-    pub const SELECT_UNIQUE_CHATS_FOR_MINT: &str = r#"
-        SELECT DISTINCT chat_id, chat_name
-        FROM messages
-        WHERE mint = $1
-        ORDER BY chat_name
-    "#;
-
-    pub const DELETE_OLD_MESSAGES: &str = r#"
-        DELETE FROM messages
-        WHERE timestamp_us < $1
-    "#;
-
-    pub const DELETE_ORPHAN_CHATS: &str = r#"
-        DELETE FROM chats
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM messages
-            WHERE messages.chat_id = chats.chat_id
-        )
-    "#;
-
-    pub const SELECT_STATS: &str = r#"
-        SELECT
-            COUNT(*) as total_messages,
-            COUNT(DISTINCT mint) as unique_mints,
-            COUNT(DISTINCT chat_id) as unique_chats,
-            MIN(timestamp_us) as oldest_message,
-            MAX(timestamp_us) as newest_message
-        FROM messages
-    "#;
-
-    pub const SELECT_MINTS_FOR_CHAT_ID: &str = r#"
-        SELECT DISTINCT mint
-        FROM messages
-        WHERE chat_id = $1
-        ORDER BY mint
-    "#;
-
-    pub const SELECT_MINTS_FOR_CHAT_NAME: &str = r#"
-        SELECT DISTINCT mint
-        FROM messages
-        WHERE chat_name = $1
-        ORDER BY mint
-    "#;
-
-    pub const SELECT_CHATS_WITH_ANY_MINT: &str = r#"
-        SELECT DISTINCT chat_id, chat_name
-        FROM messages
-        WHERE mint IS NOT NULL AND mint <> ''
-        ORDER BY chat_name
-    "#;
-
-    pub const SELECT_CHANNELS_BY_SUBSTRING: &str = r#"
-        SELECT chat_id, chat_name
-        FROM chats
-        WHERE chat_name ILIKE '%' || $1 || '%'
-        ORDER BY chat_name
-    "#;
-
-    pub const SELECT_CONTEXTS_BY_CHANNEL_SUBSTRING: &str = r#"
-        SELECT DISTINCT m.mint
-        FROM messages m
-        JOIN chats c ON c.chat_id = m.chat_id
-        WHERE c.chat_name ILIKE '%' || $1 || '%'
-        ORDER BY m.mint
-    "#;
-}
+mod cache;
+mod models;
+mod sql;
 
 pub use models::{ChatEntry, QueryResult, StoredMessage};
 
 pub struct DatabaseManager {
     pool: Pool,
-    chat_cache: Arc<Mutex<cache::ChatCacheImpl>>,
-    mint_cache: Arc<Mutex<cache::MintCacheImpl>>,
+    chat_cache: Arc<Mutex<cache::ChatCache>>,
+    mint_cache: Arc<Mutex<cache::MintCache>>,
     config: DatabaseConfig,
 }
 
@@ -283,8 +25,8 @@ impl DatabaseManager {
 
         Ok(Self {
             pool,
-            chat_cache: Arc::new(Mutex::new(cache::ChatCacheImpl::new(10_000))),
-            mint_cache: Arc::new(Mutex::new(cache::MintCacheImpl::new(
+            chat_cache: Arc::new(Mutex::new(cache::ChatCache::new(10_000))),
+            mint_cache: Arc::new(Mutex::new(cache::MintCache::new(
                 Self::cache_capacity_entries(config.cache_size_mb),
                 config.cache_ttl_seconds,
             ))),
@@ -305,8 +47,7 @@ impl DatabaseManager {
             ..Default::default()
         });
 
-        let pool = pg.create_pool(Some(Runtime::Tokio1), NoTls)?;
-        Ok(pool)
+        Ok(pg.create_pool(Some(Runtime::Tokio1), NoTls)?)
     }
 
     async fn init_schema(pool: &Pool) -> Result<(), Box<dyn std::error::Error>> {
@@ -587,7 +328,7 @@ impl DatabaseManager {
             .await
             .map_err(|e| format!("Failed to get stats: {}", e))?;
 
-        Ok(json!({
+        Ok(serde_json::json!({
             "total_messages": row.get::<_, i64>(0),
             "unique_mints": row.get::<_, i64>(1),
             "unique_chats": row.get::<_, i64>(2),

@@ -1,39 +1,37 @@
 mod clients;
 mod config;
-mod models;
-mod router;
 mod database;
+mod models;
 mod query_server;
+mod router;
 
 use config::Config;
-use router::Router;
 use database::DatabaseManager;
 use query_server::QueryServer;
+use router::Router;
 use serde_json;
 use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Runtime;
-use tracing::{info, error, debug, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
 fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt: Arc<Runtime>) {
     let addr = stream.peer_addr().ok();
-    
     if config.monitoring.log_connections {
         info!("[INPUT] Client connected: {:?}", addr);
     }
-    
     let reader = BufReader::new(stream);
-    
     for line in reader.lines() {
         match line {
             Ok(msg_str) => {
                 if config.monitoring.log_messages {
                     debug!("[INPUT] Received: {}", msg_str);
                 }
-                
+                if config.monitoring.log_incoming_payload {
+                    info ! (target : "incoming_payload" , client = ? addr , payload = % msg_str , "Incoming message payload");
+                }
                 match serde_json::from_str::<models::IncomingMessage>(&msg_str) {
                     Ok(msg) => {
                         if config.monitoring.log_messages {
@@ -43,12 +41,8 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
                             debug!("[INPUT] Text length: {} chars", msg.text.len());
                             debug!("[INPUT] Mints array: {:?}", msg.mints);
                         }
-                        
-                        // Clone the router and spawn the async task using the provided runtime
                         let router_clone = Arc::clone(&router);
                         let rt_clone = rt.clone();
-                        
-                        // Use the runtime to spawn the async task
                         rt_clone.spawn(async move {
                             router_clone.process_message(&msg).await;
                         });
@@ -69,7 +63,6 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
             }
         }
     }
-    
     if config.monitoring.log_connections {
         info!("[INPUT] Client disconnected: {:?}", addr);
     }
@@ -78,19 +71,26 @@ fn handle_client(stream: TcpStream, router: Arc<Router>, config: Arc<Config>, rt
 fn main() -> std::io::Result<()> {
     // Initialize tracing subscriber with JSON formatting for production
     // Or use simple formatting for development
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"))
+        .add_directive("forwarding=info".parse().unwrap())
+        .add_directive("forwarding_payload=debug".parse().unwrap())
+        .add_directive("incoming_payload=info".parse().unwrap())
+        .add_directive("client_payload=debug".parse().unwrap());
+
     fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_target(false)
+        .with_env_filter(env_filter)
+        .with_target(true) // Show targets in logs
         .with_thread_ids(true)
         .with_file(true)
         .with_line_number(true)
         .init();
-    
+
     info!("Starting TCP Router with tracing enabled");
-    
+
     // Create tokio runtime
     let rt = Arc::new(Runtime::new().unwrap());
-    
+
     rt.block_on(async {
         // Load configuration
         let config = match Config::from_file("config.toml") {
@@ -100,7 +100,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
         };
-        
+
         // Initialize database
         let db = match DatabaseManager::new(config.database.clone()).await {
             Ok(d) => Arc::new(d),
@@ -109,7 +109,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
         };
-        
+
         // Initialize router
         let router = match Router::new(Arc::clone(&config), Arc::clone(&db)).await {
             Ok(r) => Arc::new(r),
@@ -118,7 +118,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
         };
-        
+
         // Start query server
         let query_server = QueryServer::new(config.query_server.clone(), Arc::clone(&db));
         let query_server_handle = thread::spawn(move || {
@@ -126,37 +126,40 @@ fn main() -> std::io::Result<()> {
                 error!("Query server error: {}", e);
             }
         });
-        
+
         info!("TCP Router starting...");
         info!("================================");
         info!("Input listener: {}", config.tcp_input.listen_address);
-        info!("PostgreSQL Database: {}:{}/{}", 
-            config.database.host, 
-            config.database.port, 
-            config.database.dbname);
+        info!(
+            "PostgreSQL Database: {}:{}/{}",
+            config.database.host, config.database.port, config.database.dbname
+        );
         info!("Cache size: {} MB", config.database.cache_size_mb);
         info!("Cache TTL: {} seconds", config.database.cache_ttl_seconds);
         info!("Compression: {}", config.database.compress_messages);
         info!("Enabled routes:");
         for route in config.get_enabled_routes() {
-            info!("  • {} -> {} ({})", 
-                     route.name, 
-                     route.output_address,
-                     route.output_type);
+            info!(
+                "  • {} -> {} ({})",
+                route.name, route.output_address, route.output_type
+            );
             info!("    Pattern: {}", route.pattern);
-            info!("    Escape newlines: {}", route.output_format.escape_newlines);
+            info!(
+                "    Escape newlines: {}",
+                route.output_format.escape_newlines
+            );
         }
         info!("================================");
-        
+
         let listener = TcpListener::bind(&config.tcp_input.listen_address)?;
-        
+
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
                     let router_clone = Arc::clone(&router);
                     let config_clone = Arc::clone(&config);
                     let rt_clone = Arc::clone(&rt);
-                    
+
                     std::thread::spawn(move || {
                         handle_client(stream, router_clone, config_clone, rt_clone);
                     });
@@ -168,10 +171,11 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
-        
+
         // Wait for query server to finish (should not happen)
         let _ = query_server_handle.join();
-        
+
         Ok(())
     })
 }
+
