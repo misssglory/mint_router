@@ -427,40 +427,35 @@ impl Router {
             info!("[ROUTER] Successfully forwarded to {}", route.name);
         }
     }
-
-    /// FIXED: Preserve original context from incoming message
-    /// Do NOT override with mint_address - keep msg.context as-is
-    fn create_output_message(
-        &self,
-        msg: &IncomingMessage,
-        route: &RouteConfig,
-        mint_address: Option<String>,
-        pool_address: Option<String>,
-        timestamp: i64,
-    ) -> OutputMessage {
-        // CRITICAL FIX: Use the original context from the incoming message
-        // Do NOT replace with mint_address or pool_address
-        let context = msg.context.clone();
-
-        // Determine which address to put in pool field (prefer pool over mint)
-        let pool = pool_address.or(mint_address);
-
-        debug!(
-            "[ROUTER] Creating output message - Original context: '{}', pool: {:?}",
-            context, pool
-        );
-
-        OutputMessage {
-            context,
-            command: route.output_format.command.clone(),
-            args: OutputArgs {
-                channel: msg.chat_name.clone(),
-                ts: timestamp,
-                text: msg.text.clone(),
-            },
-            pool,
-        }
+fn create_output_message(
+    &self,
+    msg: &IncomingMessage,
+    route: &RouteConfig,
+    mint_address: Option<String>,
+    pool_address: Option<String>,
+    timestamp: i64,
+) -> OutputMessage {
+    let context = if let Some(ref mint) = mint_address {
+        mint.clone()
+    } else {
+        msg.context.clone()
+    };
+    let pool = pool_address;
+    debug!(
+        "[ROUTER] Creating output message - Context: '{}', mint: {:?}, pool: {:?}, route: {}",
+        context, mint_address, pool, route.name
+    );
+    OutputMessage {
+        context,
+        command: route.output_format.command.clone(),
+        args: OutputArgs {
+            channel: msg.chat_name.clone(),
+            ts: timestamp,
+            text: msg.text.clone(),
+        },
+        pool,
     }
+}
 
     fn get_escape_newlines_setting(&self) -> bool {
         self.config
@@ -476,4 +471,3 @@ fn get_timestamp_micros() -> i64 {
     let duration = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
     (duration.as_secs() as i64) * 1_000_000 + (duration.subsec_micros() as i64)
 }
-
