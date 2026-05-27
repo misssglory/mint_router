@@ -46,7 +46,7 @@ impl Router {
             msg.context, msg.pool
         );
 
-        // Store messages for mints (only mints, not pools)
+        // Store messages for mints
         let all_mints = self.collect_all_mints(msg);
         for mint in all_mints {
             if let Err(err) = self
@@ -72,13 +72,13 @@ impl Router {
             }
         }
 
-        // Store messages for pools in database (using separate table or prefix)
+        // Store messages for pools
         let all_pools = self.collect_all_pools(msg);
         for pool in all_pools {
             if let Err(err) = self
                 .db
                 .store_message(
-                    &format!("pool:{}", pool), // Prefix to distinguish from mints
+                    &format!("pool:{}", pool),
                     msg.chat_id,
                     &msg.chat_name,
                     &msg.text,
@@ -205,6 +205,42 @@ impl Router {
                 self.forward_to_client(&output_msg, route, &pool_address);
             }
         }
+
+        // Process Base chain mints and pools - route to Ethereum endpoint
+        let base_mints = self.collect_base_mints(msg);
+        let base_pools = self.collect_base_pools(msg);
+
+        for mint_address in base_mints {
+            if let Some(route) = self.find_route_by_name("ethereum") {
+                if self.config.monitoring.log_forwarding {
+                    debug!("[ROUTER] Processing Base mint: {} -> routing to Ethereum endpoint", mint_address);
+                }
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    Some(mint_address.clone()),
+                    None,
+                    timestamp,
+                );
+                self.forward_to_client(&output_msg, route, &mint_address);
+            }
+        }
+
+        for pool_address in base_pools {
+            if let Some(route) = self.find_route_by_name("ethereum") {
+                if self.config.monitoring.log_forwarding {
+                    debug!("[ROUTER] Processing Base pool: {} -> routing to Ethereum endpoint", pool_address);
+                }
+                let output_msg = self.create_output_message(
+                    msg,
+                    route,
+                    None,
+                    Some(pool_address.clone()),
+                    timestamp,
+                );
+                self.forward_to_client(&output_msg, route, &pool_address);
+            }
+        }
     }
 
     fn collect_solana_mints(&self, msg: &IncomingMessage) -> Vec<String> {
@@ -263,6 +299,7 @@ impl Router {
         mints.dedup();
         mints
     }
+
     fn collect_ethereum_pools(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut pools = Vec::new();
         pools.extend(msg.ethereum_pools.clone());
@@ -279,6 +316,7 @@ impl Router {
         pools.dedup();
         pools
     }
+
     fn collect_bnb_mints(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut mints = Vec::new();
         mints.extend(msg.bsc_mints.clone());
@@ -296,12 +334,40 @@ impl Router {
         mints.dedup();
         mints
     }
+
     fn collect_bnb_pools(&self, msg: &IncomingMessage) -> Vec<String> {
         let mut pools = Vec::new();
         pools.extend(msg.bsc_pools.clone());
         if let Some(pool_addresses) = &msg.pool_addresses {
             if let Some(bsc_pools) = pool_addresses.get("bsc") {
                 pools.extend(bsc_pools.clone());
+            }
+        }
+        pools.sort();
+        pools.dedup();
+        pools
+    }
+
+    // ADD Base chain collection methods
+    fn collect_base_mints(&self, msg: &IncomingMessage) -> Vec<String> {
+        let mut mints = Vec::new();
+        mints.extend(msg.base_mints.clone());
+        if let Some(addresses) = &msg.addresses {
+            if let Some(base_addrs) = addresses.get("base") {
+                mints.extend(base_addrs.clone());
+            }
+        }
+        mints.sort();
+        mints.dedup();
+        mints
+    }
+
+    fn collect_base_pools(&self, msg: &IncomingMessage) -> Vec<String> {
+        let mut pools = Vec::new();
+        pools.extend(msg.base_pools.clone());
+        if let Some(pool_addresses) = &msg.pool_addresses {
+            if let Some(base_pools) = pool_addresses.get("base") {
+                pools.extend(base_pools.clone());
             }
         }
         pools.sort();
@@ -316,6 +382,7 @@ impl Router {
         all_mints.extend(msg.ethereum_mints.clone());
         all_mints.extend(msg.evm_mints.clone());
         all_mints.extend(msg.bsc_mints.clone());
+        all_mints.extend(msg.base_mints.clone());  // ADD Base mints
         if let Some(addresses) = &msg.addresses {
             for (_, addrs) in addresses {
                 all_mints.extend(addrs.clone());
@@ -333,6 +400,7 @@ impl Router {
         all_pools.extend(msg.ethereum_pools.clone());
         all_pools.extend(msg.evm_pools.clone());
         all_pools.extend(msg.bsc_pools.clone());
+        all_pools.extend(msg.base_pools.clone());  // ADD Base pools
         if let Some(pool_addresses) = &msg.pool_addresses {
             for (_, pools) in pool_addresses {
                 all_pools.extend(pools.clone());
@@ -371,7 +439,6 @@ impl Router {
             return;
         }
 
-        // Always log basic info if forwarding logging is on
         info!(
             target: "forwarding",
             route = %route.name,
@@ -382,7 +449,6 @@ impl Router {
             "Forwarding to route"
         );
 
-        // Log full payload if enabled
         if self.config.monitoring.log_forwarding_payload {
             match serde_json::to_string_pretty(output_msg) {
                 Ok(payload) => {
@@ -421,41 +487,48 @@ impl Router {
         };
         if let Err(err) = result {
             if self.config.monitoring.log_errors {
-                error ! (target : "forwarding_errors" , route = % route . name , address = % address , error = % err , "Failed to forward to route");
+                error!(
+                    target: "forwarding_errors",
+                    route = %route.name,
+                    address = %address,
+                    error = %err,
+                    "Failed to forward to route"
+                );
             }
         } else if self.config.monitoring.log_forwarding {
             info!("[ROUTER] Successfully forwarded to {}", route.name);
         }
     }
-fn create_output_message(
-    &self,
-    msg: &IncomingMessage,
-    route: &RouteConfig,
-    mint_address: Option<String>,
-    pool_address: Option<String>,
-    timestamp: i64,
-) -> OutputMessage {
-    let context = if let Some(ref mint) = mint_address {
-        mint.clone()
-    } else {
-        msg.context.clone()
-    };
-    let pool = pool_address;
-    debug!(
-        "[ROUTER] Creating output message - Context: '{}', mint: {:?}, pool: {:?}, route: {}",
-        context, mint_address, pool, route.name
-    );
-    OutputMessage {
-        context,
-        command: route.output_format.command.clone(),
-        args: OutputArgs {
-            channel: msg.chat_name.clone(),
-            ts: timestamp,
-            text: msg.text.clone(),
-        },
-        pool,
+
+    fn create_output_message(
+        &self,
+        msg: &IncomingMessage,
+        route: &RouteConfig,
+        mint_address: Option<String>,
+        pool_address: Option<String>,
+        timestamp: i64,
+    ) -> OutputMessage {
+        let context = if let Some(ref mint) = mint_address {
+            mint.clone()
+        } else {
+            msg.context.clone()
+        };
+        let pool = pool_address;
+        debug!(
+            "[ROUTER] Creating output message - Context: '{}', mint: {:?}, pool: {:?}, route: {}",
+            context, mint_address, pool, route.name
+        );
+        OutputMessage {
+            context,
+            command: route.output_format.command.clone(),
+            args: OutputArgs {
+                channel: msg.chat_name.clone(),
+                ts: timestamp,
+                text: msg.text.clone(),
+            },
+            pool,
+        }
     }
-}
 
     fn get_escape_newlines_setting(&self) -> bool {
         self.config

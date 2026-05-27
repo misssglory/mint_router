@@ -10,9 +10,9 @@ pub struct IncomingMessage {
     pub text: String,
     pub tokens: Vec<String>,
     #[serde(default)]
-    pub context: String,  // ADD THIS - preserve original context
+    pub context: String,
     #[serde(default)]
-    pub pool: Option<String>,  // ADD THIS - preserve original pool
+    pub pool: Option<String>,
     #[serde(default)]
     pub ethereum_mints: Vec<String>,
     #[serde(default)]
@@ -37,15 +37,21 @@ pub struct IncomingMessage {
     pub bsc_pools: Vec<String>,
     #[serde(default)]
     pub pool_addresses: Option<HashMap<String, Vec<String>>>,
+    
+    // ADD Base chain fields
+    #[serde(default)]
+    pub base_mints: Vec<String>,
+    #[serde(default)]
+    pub base_pools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OutputMessage {
-    pub context: String,  // Will preserve original empty string from incoming
+    pub context: String,
     pub command: String,
     pub args: OutputArgs,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pool: Option<String>,  // Pool address field
+    pub pool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
