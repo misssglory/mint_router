@@ -3,10 +3,11 @@ listen_address = "127.0.0.1:9000"
 
 [[routes]]
 name = "solana"
-enabled = false
+enabled = true
 pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1266"
+# output_address = "127.0.0.1:9999"
 output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
 
 [[routes]]
@@ -14,7 +15,7 @@ name = "ethereum"
 enabled = true
 pattern = "^0x[a-fA-F0-9]{64}$|^0x[a-fA-F0-9]{40}$"
 output_type = "tcp"
-output_address = "127.0.0.1:1277"
+output_address = "127.0.0.1:1282"
 output_format = { context = "ETH_MINT_ADDRESS", command = "tg_eth", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
 chain_hints = ["ethereum", "eth", "erc20", "mainnet"]
 
@@ -49,3 +50,23 @@ compress_messages = true
 [query_server]
 enabled = true
 listen_address = "127.0.0.1:9999"
+
+[ignore_channels]
+chat_ids = [
+    -1001234567890,
+    -1009876543210,
+]
+
+chat_names = [
+    # "spam_channel",
+    # "test_channel",
+    # "ignore_this",
+    "Skeleton Trending",
+]
+
+patterns = [
+    # ".*spam.*",      
+    # "^test_.*",     
+    # "(?i).*debug.*",
+    # "^ignore_me$", 
+]

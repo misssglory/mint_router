@@ -38,6 +38,10 @@ impl Router {
     }
 
     pub async fn process_message(&self, msg: &IncomingMessage) {
+        if !self.should_process_message(msg) {
+            return;
+        }
+
         let timestamp = get_timestamp_micros();
         let escape_newlines = self.get_escape_newlines_setting();
 
@@ -213,7 +217,10 @@ impl Router {
         for mint_address in base_mints {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
-                    debug!("[ROUTER] Processing Base mint: {} -> routing to Ethereum endpoint", mint_address);
+                    debug!(
+                        "[ROUTER] Processing Base mint: {} -> routing to Ethereum endpoint",
+                        mint_address
+                    );
                 }
                 let output_msg = self.create_output_message(
                     msg,
@@ -229,7 +236,10 @@ impl Router {
         for pool_address in base_pools {
             if let Some(route) = self.find_route_by_name("ethereum") {
                 if self.config.monitoring.log_forwarding {
-                    debug!("[ROUTER] Processing Base pool: {} -> routing to Ethereum endpoint", pool_address);
+                    debug!(
+                        "[ROUTER] Processing Base pool: {} -> routing to Ethereum endpoint",
+                        pool_address
+                    );
                 }
                 let output_msg = self.create_output_message(
                     msg,
@@ -382,7 +392,7 @@ impl Router {
         all_mints.extend(msg.ethereum_mints.clone());
         all_mints.extend(msg.evm_mints.clone());
         all_mints.extend(msg.bsc_mints.clone());
-        all_mints.extend(msg.base_mints.clone());  // ADD Base mints
+        all_mints.extend(msg.base_mints.clone()); // ADD Base mints
         if let Some(addresses) = &msg.addresses {
             for (_, addrs) in addresses {
                 all_mints.extend(addrs.clone());
@@ -400,7 +410,7 @@ impl Router {
         all_pools.extend(msg.ethereum_pools.clone());
         all_pools.extend(msg.evm_pools.clone());
         all_pools.extend(msg.bsc_pools.clone());
-        all_pools.extend(msg.base_pools.clone());  // ADD Base pools
+        all_pools.extend(msg.base_pools.clone()); // ADD Base pools
         if let Some(pool_addresses) = &msg.pool_addresses {
             for (_, pools) in pool_addresses {
                 all_pools.extend(pools.clone());
@@ -536,6 +546,23 @@ impl Router {
             .first()
             .map(|r| r.output_format.escape_newlines)
             .unwrap_or(false)
+    }
+
+    fn should_process_message(&self, msg: &IncomingMessage) -> bool {
+        let should_ignore = self
+            .config
+            .should_ignore_channel(msg.chat_id, &msg.chat_name);
+
+        if should_ignore && self.config.monitoring.log_ignored_messages {
+            info!(
+                target: "ignored_channels",
+                chat_id = msg.chat_id,
+                chat_name = %msg.chat_name,
+                "Message from ignored channel, skipping processing"
+            );
+        }
+
+        !should_ignore
     }
 }
 

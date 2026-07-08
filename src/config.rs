@@ -9,6 +9,18 @@ pub struct Config {
     pub monitoring: MonitoringConfig,
     pub database: DatabaseConfig,
     pub query_server: QueryServerConfig,
+    #[serde(default)]
+    pub ignore_channels: IgnoreChannelsConfig,  // ADD THIS
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IgnoreChannelsConfig {
+    #[serde(default)]
+    pub chat_ids: Vec<i64>,      // Channel IDs to ignore
+    #[serde(default)]
+    pub chat_names: Vec<String>,  // Channel names to ignore (case-sensitive)
+    #[serde(default)]
+    pub patterns: Vec<String>,    // Regex patterns to match channel names
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -42,6 +54,7 @@ pub struct OutputFormat {
 fn default_escape_newlines() -> bool {
     false
 }
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MonitoringConfig {
     pub log_messages: bool,
@@ -52,6 +65,8 @@ pub struct MonitoringConfig {
     pub log_forwarding_payload: bool,
     #[serde(default)]
     pub log_incoming_payload: bool,
+    #[serde(default)]
+    pub log_ignored_messages: bool,  // ADD THIS - log when messages are ignored
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -82,5 +97,29 @@ impl Config {
 
     pub fn get_enabled_routes(&self) -> Vec<&RouteConfig> {
         self.routes.iter().filter(|r| r.enabled).collect()
+    }
+    
+    // ADD helper method to check if a channel should be ignored
+    pub fn should_ignore_channel(&self, chat_id: i64, chat_name: &str) -> bool {
+        // Check by chat ID
+        if self.ignore_channels.chat_ids.contains(&chat_id) {
+            return true;
+        }
+        
+        // Check by exact chat name
+        if self.ignore_channels.chat_names.iter().any(|name| name == chat_name) {
+            return true;
+        }
+        
+        // Check by regex patterns
+        for pattern_str in &self.ignore_channels.patterns {
+            if let Ok(re) = regex::Regex::new(pattern_str) {
+                if re.is_match(chat_name) {
+                    return true;
+                }
+            }
+        }
+        
+        false
     }
 }
