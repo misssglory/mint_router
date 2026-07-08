@@ -532,11 +532,27 @@ impl Router {
             context,
             command: route.output_format.command.clone(),
             args: OutputArgs {
-                channel: msg.chat_name.clone(),
+                channel: self.get_output_channel(msg, route),
                 ts: timestamp,
                 text: msg.text.clone(),
             },
             pool,
+        }
+    }
+
+    fn get_output_channel(&self, msg: &IncomingMessage, route: &RouteConfig) -> String {
+        match route.output_format.channel_field.as_str() {
+            "chat_id" | "channel_id" | "id" => msg.chat_id.to_string(),
+            "chat_name" | "channel_name" | "name" => msg.chat_name.clone(),
+            unknown => {
+                warn!(
+                    target: "config",
+                    route = %route.name,
+                    channel_field = %unknown,
+                    "Unknown channel_field value; defaulting to chat_name"
+                );
+                msg.chat_name.clone()
+            }
         }
     }
 

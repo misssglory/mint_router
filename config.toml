@@ -8,6 +8,8 @@ pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
 output_type = "tcp"
 output_address = "127.0.0.1:1266"
 # output_address = "127.0.0.1:9999"
+# Set channel_field to "chat_id" to send the numeric Telegram channel ID in args.channel.
+# Use "chat_name" to keep sending the channel name.
 output_format = { context = "MINT_ADDRESS", command = "tg", channel_field = "chat_name", text_field = "text", timestamp_field = "auto", escape_newlines = true }
 
 [[routes]]
